@@ -9,7 +9,7 @@ class LLMService:
             raise ValueError("GEMINI_API_KEY no configurada")
         
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
         
         # System prompt para el avatar paciente
         self.system_prompt = """Eres un paciente virtual en crisis de ansiedad siendo entrevistado por un estudiante de salud.

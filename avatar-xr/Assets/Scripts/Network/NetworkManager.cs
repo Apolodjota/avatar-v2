@@ -27,6 +27,14 @@ namespace AvatarXR.Network
         public string timestamp;
     }
 
+    [Serializable]
+    public class SynthesizeTextResponse
+    {
+        public string text;
+        public string audio_url;
+        public int stress_level;
+    }
+
     /// <summary>
     /// Manager singleton para comunicación HTTP con el backend de IA.
     /// </summary>
@@ -172,6 +180,47 @@ namespace AvatarXR.Network
                     callback?.Invoke(null);
                 }
             }
+        }
+
+        /// <summary>
+        /// Sintetiza texto a voz usando el backend.
+        /// </summary>
+        public IEnumerator SynthesizeText(string text, int stressLevel, Action<SynthesizeTextResponse> callback)
+        {
+            string url = $"{baseUrl}/api/synthesize-text";
+            
+            // Crear JSON body
+            string jsonBody = JsonUtility.ToJson(new SynthesizeRequest { text = text, stress_level = stressLevel });
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
+
+            using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+            {
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+                request.timeout = (int)timeout;
+
+                yield return request.SendWebRequest();
+
+                if (request.result == UnityWebRequest.Result.Success)
+                {
+                    var response = JsonUtility.FromJson<SynthesizeTextResponse>(request.downloadHandler.text);
+                    Debug.Log($"[NetworkManager] TTS completado: {response.audio_url}");
+                    callback?.Invoke(response);
+                }
+                else
+                {
+                    Debug.LogError($"[NetworkManager] Error sintetizando texto: {request.error}");
+                    callback?.Invoke(null);
+                }
+            }
+        }
+
+        [Serializable]
+        private class SynthesizeRequest
+        {
+            public string text;
+            public int stress_level;
         }
 
         /// <summary>

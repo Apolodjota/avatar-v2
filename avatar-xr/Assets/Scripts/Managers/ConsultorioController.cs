@@ -1,9 +1,11 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.InputSystem;
 using TMPro;
 using System.Collections;
 using System.Collections.Generic;
 using AvatarXR.UI;
+using GoogleTextToSpeech.Scripts; // Nuevo using
 
 namespace AvatarXR.Managers
 {
@@ -48,10 +50,18 @@ namespace AvatarXR.Managers
         [SerializeField] private GameObject mainMenuCanvas; // Referencia al Canvas del menú
         [SerializeField] private MenuStateManager menuStateManager; // Referencia al manager del menú
 
+        [Header("Referencias XR para Pausa")]
+        [SerializeField] private Camera xrCamera;
+        [SerializeField] private float pauseMenuDistance = 2f;
+
         [Header("Colores de Estado del Micrófono")]
         [SerializeField] private Color micOpenColor = new Color(0.2f, 0.8f, 0.2f, 1f);
         [SerializeField] private Color micProcessingColor = new Color(0.9f, 0.7f, 0.1f, 1f);
         [SerializeField] private Color micClosedColor = new Color(0.5f, 0.5f, 0.5f, 1f);
+
+        [Header("Google / Gemini Integration")]
+        [SerializeField] private UnityAndGeminiV3 geminiManager;
+        [SerializeField] private TextToSpeechManager textToSpeechManager;
 
         [Header("Audio")]
         [SerializeField] private AudioSource avatarAudioSource;
@@ -161,8 +171,8 @@ namespace AvatarXR.Managers
                 EndSession(false, "Tiempo agotado");
             }
 
-            // Detectar botón de pausa (Menu button en Quest o ESC en teclado)
-            if (OVRInput.GetDown(OVRInput.Button.Start) || Input.GetKeyDown(KeyCode.Escape))
+            // Detectar botón de pausa (solo tecla ESC con nuevo Input System)
+            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
             {
                 TogglePause();
             }
@@ -253,12 +263,34 @@ namespace AvatarXR.Managers
             // Avatar inicia la conversación
             SetSessionState(SessionState.AvatarSpeaking);
             
-            // TODO: Aquí se conectará con el backend para obtener el diálogo inicial
-            // Por ahora, simulamos la primera línea del avatar
-            Debug.Log("[Consultorio] Avatar dice: 'No sé qué hacer... todo me supera últimamente'");
-
-            // Simular duración del audio del avatar (se reemplazará con duración real)
-            yield return new WaitForSeconds(3f);
+            // Usar ConversationController para el saludo inicial (backend approach)
+            var conversationController = FindObjectOfType<ConversationController>();
+            if (conversationController != null && conversationController.enabled)
+            {
+                string initialText = "No sé qué hacer... todo me supera últimamente";
+                Debug.Log($"[Consultorio] Avatar dice (Backend TTS): '{initialText}'");
+                conversationController.SayText(initialText, initialStressLevel);
+                
+                yield return new WaitForSeconds(1f); 
+                while (currentState == SessionState.AvatarSpeaking)
+                {
+                    yield return null;
+                }
+            }
+            else if (textToSpeechManager != null && textToSpeechManager.enabled)
+            {
+                // Fallback a SDK directo si está habilitado
+                string initialText = "No sé qué hacer... todo me supera últimamente";
+                Debug.Log($"[Consultorio] Avatar dice (Google TTS): '{initialText}'");
+                textToSpeechManager.SendTextToGoogle(initialText);
+                yield return new WaitForSeconds(3f + (initialText.Length * 0.05f));
+            }
+            else
+            {
+                Debug.LogWarning("[Consultorio] No se encontró sistema de TTS. Simulando...");
+                Debug.Log("[Consultorio] Avatar dice: 'No sé qué hacer... todo me supera últimamente'");
+                yield return new WaitForSeconds(3f);
+            }
 
             // Abrir micrófono para el usuario
             SetSessionState(SessionState.WaitingForUser);
@@ -457,9 +489,39 @@ namespace AvatarXR.Managers
             if (pauseMenuCanvas != null)
             {
                 pauseMenuCanvas.SetActive(true);
+                PositionPauseMenuInFrontOfPlayer();
+            }
+            
+            // Bloquear movimiento durante pausa
+            if (menuStateManager != null)
+            {
+                menuStateManager.SetMenuState(true);
             }
 
             Debug.Log("[Consultorio] Sesión pausada");
+        }
+
+        private void PositionPauseMenuInFrontOfPlayer()
+        {
+            if (xrCamera == null)
+            {
+                xrCamera = Camera.main;
+            }
+            
+            if (xrCamera != null && pauseMenuCanvas != null)
+            {
+                Vector3 forward = xrCamera.transform.forward;
+                forward.y = 0;
+                forward.Normalize();
+                
+                Vector3 menuPos = xrCamera.transform.position + forward * pauseMenuDistance;
+                menuPos.y = xrCamera.transform.position.y;
+                
+                pauseMenuCanvas.transform.position = menuPos;
+                pauseMenuCanvas.transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+                
+                Debug.Log($"[Consultorio] Menú de pausa posicionado en {menuPos}");
+            }
         }
 
         public void ResumeSession()
@@ -472,6 +534,17 @@ namespace AvatarXR.Managers
             {
                 pauseMenuCanvas.SetActive(false);
             }
+            
+            // Restaurar movimiento (pero mantener menú principal oculto)
+            if (menuStateManager != null)
+            {
+                // Solo desbloquear locomotion, no mostrar menú principal
+                menuStateManager.SetMenuState(false);
+                if (mainMenuCanvas != null)
+                {
+                    mainMenuCanvas.SetActive(false);
+                }
+            }
 
             Debug.Log("[Consultorio] Sesión reanudada");
         }
@@ -479,14 +552,50 @@ namespace AvatarXR.Managers
         public void RestartSession()
         {
             Time.timeScale = 1f;
-            UnityEngine.SceneManagement.SceneManager.LoadScene("Consultorio");
+            isPaused = false;
+            
+            // Ocultar menú de pausa
+            if (pauseMenuCanvas != null)
+            {
+                pauseMenuCanvas.SetActive(false);
+            }
+            
+            // Desbloquear movimiento
+            if (menuStateManager != null)
+            {
+                menuStateManager.SetMenuState(false);
+                if (mainMenuCanvas != null)
+                {
+                    mainMenuCanvas.SetActive(false);
+                }
+            }
+            
+            // Reiniciar con la misma configuración (sin recargar escena)
+            detectedEmotions.Clear();
+            InitializeSession();
+            
+            Debug.Log("[Consultorio] Sesión reiniciada con la misma configuración.");
         }
 
         public void ExitToMainMenu()
         {
             Time.timeScale = 1f;
+            isPaused = false;
+            sessionEnded = true;
             
-            if (GameManager.Instance != null)
+            // Ocultar menú de pausa
+            if (pauseMenuCanvas != null)
+            {
+                pauseMenuCanvas.SetActive(false);
+            }
+            
+            // Mostrar menú principal via MenuStateManager
+            if (menuStateManager != null)
+            {
+                menuStateManager.ShowMenu();
+                Debug.Log("[Consultorio] Volviendo al menú principal.");
+            }
+            else if (GameManager.Instance != null)
             {
                 GameManager.Instance.ReturnToMainMenu();
             }

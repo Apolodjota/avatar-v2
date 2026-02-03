@@ -35,7 +35,12 @@ namespace AvatarXR.Managers
         [Header("Layers")]
         [SerializeField] private LayerMask uiLayerMask = 1 << 5; // UI layer
 
+        [Header("Bloqueo de Posición")]
+        [SerializeField] private bool lockPositionDuringMenu = true;
+
         private bool isMenuActive = true;
+        private Vector3 lockedPosition;
+        private bool positionLocked = false;
 
         public bool IsMenuActive => isMenuActive;
 
@@ -58,6 +63,15 @@ namespace AvatarXR.Managers
             if (positionMenuOnStart && mainMenuCanvas != null)
             {
                 StartCoroutine(PositionMenuInFrontOfPlayer());
+            }
+        }
+
+        private void Update()
+        {
+            // Bloquear posición del XR Origin mientras el menú está activo
+            if (isMenuActive && positionLocked && lockPositionDuringMenu && xrOrigin != null)
+            {
+                xrOrigin.position = lockedPosition;
             }
         }
 
@@ -135,6 +149,19 @@ namespace AvatarXR.Managers
         public void SetMenuState(bool menuActive)
         {
             isMenuActive = menuActive;
+
+            // Controlar bloqueo de posición
+            if (menuActive && lockPositionDuringMenu && xrOrigin != null)
+            {
+                lockedPosition = xrOrigin.position;
+                positionLocked = true;
+                Debug.Log($"[MenuStateManager] Posición bloqueada en {lockedPosition}");
+            }
+            else
+            {
+                positionLocked = false;
+                Debug.Log("[MenuStateManager] Posición desbloqueada");
+            }
 
             // Controlar locomotion
             if (locomotionSystem != null)

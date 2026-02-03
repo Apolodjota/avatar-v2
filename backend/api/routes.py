@@ -126,13 +126,18 @@ async def process_user_audio(
         # 5. Sintetizar voz
         audio_output_filename = f"{temp_id}_response.mp3"
         audio_output_path = f"temp/{audio_output_filename}"
-        if tts is not None:
-            tts.synthesize(
-                text=avatar_response,
-                stress_level=new_stress,
-                output_path=audio_output_path
-            )
-        else:
+        
+        try:
+            if tts is not None:
+                tts.synthesize(
+                    text=avatar_response,
+                    stress_level=new_stress,
+                    output_path=audio_output_path
+                )
+            else:
+                audio_output_filename = None
+        except Exception as e:
+            print(f"⚠️ Error en TTS: {e}")
             audio_output_filename = None
         
         # 6. Guardar turno en base de datos
@@ -253,5 +258,53 @@ async def get_user_stats(user_id: str):
         db = await get_db()
         stats = await db.get_user_stats(user_id)
         return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SynthesizeRequest(BaseModel):
+    text: str
+    stress_level: int = 5
+
+
+@router.post("/synthesize-text")
+async def synthesize_text(request: SynthesizeRequest):
+    """
+    Sintetizar texto a voz sin necesidad de audio de entrada.
+    Útil para el saludo inicial del avatar.
+    """
+    import uuid
+    
+    temp_id = str(uuid.uuid4())
+    audio_output_filename = f"{temp_id}_tts.mp3"
+    audio_output_path = f"temp/{audio_output_filename}"
+    os.makedirs("temp", exist_ok=True)
+    
+    try:
+        _, _, _, tts = get_services()
+        
+        if tts is None:
+            raise HTTPException(status_code=503, detail="Servicio TTS no disponible")
+        
+        try:
+            if tts is not None:
+                tts.synthesize(
+                    text=request.text,
+                    stress_level=request.stress_level,
+                    output_path=audio_output_path
+                )
+            else:
+                audio_output_filename = None
+        except Exception as e:
+            print(f"⚠️ Error en TTS (synthesize-text): {e}")
+            audio_output_filename = None
+        
+        return {
+            "text": request.text,
+            "audio_url": f"/static/{audio_output_filename}" if audio_output_filename else None,
+            "stress_level": request.stress_level
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

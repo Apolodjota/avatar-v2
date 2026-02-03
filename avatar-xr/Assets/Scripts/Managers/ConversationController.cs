@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 using System.Collections;
 using AvatarXR.Network;
 using AvatarXR.Audio;
@@ -17,7 +18,6 @@ namespace AvatarXR.Managers
         [SerializeField] private ConsultorioController consultorioController;
 
         [Header("Configuración")]
-        [SerializeField] private KeyCode pushToTalkKey = KeyCode.Space;
         [SerializeField] private bool usePushToTalk = true;
 
         private bool isProcessing = false;
@@ -63,11 +63,14 @@ namespace AvatarXR.Managers
 
         private void HandlePushToTalk()
         {
-            if (Input.GetKeyDown(pushToTalkKey))
+            // Usar nuevo Input System para teclado
+            if (Keyboard.current == null) return;
+            
+            if (Keyboard.current.spaceKey.wasPressedThisFrame)
             {
                 StartRecording();
             }
-            else if (Input.GetKeyUp(pushToTalkKey) && isRecording)
+            else if (Keyboard.current.spaceKey.wasReleasedThisFrame && isRecording)
             {
                 StopRecordingAndProcess();
             }
@@ -239,6 +242,71 @@ namespace AvatarXR.Managers
             {
                 consultorioController.OnAvatarFinishedSpeaking();
             }
+        }
+
+        public void SayText(string text, int stressLevel)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            
+            Debug.Log($"[ConversationController] Solicitando hablar: {text}");
+            
+            // Notificar inicio
+            if (consultorioController != null) consultorioController.OnAvatarStartSpeaking();
+
+            // Llamar al backend para TTS
+            if (NetworkManager.Instance != null && NetworkManager.Instance.IsConnected)
+            {
+                StartCoroutine(SynthesizeAndPlay(text, stressLevel));
+            }
+            else
+            {
+                // Fallback a simulación si no hay backend
+                Debug.LogWarning("[ConversationController] Backend no disponible, simulando...");
+                StartCoroutine(SimulateSpeech(text));
+            }
+        }
+
+        private IEnumerator SynthesizeAndPlay(string text, int stressLevel)
+        {
+            SynthesizeTextResponse ttsResponse = null;
+            
+            yield return NetworkManager.Instance.SynthesizeText(text, stressLevel, (response) => {
+                ttsResponse = response;
+            });
+            
+            if (ttsResponse != null && !string.IsNullOrEmpty(ttsResponse.audio_url))
+            {
+                // Descargar y reproducir audio
+                yield return NetworkManager.Instance.DownloadAudio(ttsResponse.audio_url, (clip) => {
+                    if (clip != null && avatarLoader != null)
+                    {
+                        Debug.Log($"[ConversationController] Reproduciendo audio TTS: {clip.length}s");
+                        avatarLoader.Speak(clip, () => {
+                            OnAvatarFinishedSpeaking();
+                        });
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[ConversationController] No se pudo reproducir audio TTS");
+                        OnAvatarFinishedSpeaking();
+                    }
+                });
+            }
+            else
+            {
+                Debug.LogWarning("[ConversationController] TTS falló, simulando...");
+                yield return SimulateSpeech(text);
+            }
+        }
+
+        private IEnumerator SimulateSpeech(string text)
+        {
+            float duration = 3f + (text.Length * 0.1f); // Estimar duración
+            Debug.Log($"[ConversationController] Simulando habla por {duration}s: {text}");
+            
+            yield return new WaitForSeconds(duration);
+            
+            OnAvatarFinishedSpeaking();
         }
 
         private void OnAvatarReady(GameObject avatar)
