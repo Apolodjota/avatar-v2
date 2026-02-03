@@ -1,0 +1,112 @@
+
+3
+
+Automatic Zoom
+Diseño del Proyecto Final
+Integración de HCI, XR e Inteligencia Artificial
+Asignatura: Human–Computer Interaction
+Fase: Diseño y Modelado de la Solución
+Docente: Pablo F. Ordoñez Ordoñez
+Índice
+1. Título del Proyecto 2
+2. Datos del Estudiante 2
+3. Definición del Problema 2
+3.1. Contexto general 2
+3.2. Dimensión HCI 2
+3.3. Dimensión XR/AR 3
+3.4. Dimensión IA 3
+4. Objetivo General y Objetivos Específicos 4
+4.1. Objetivo general 4
+4.2. Objetivos específicos 4
+5. Usuarios y contexto de uso 5
+6. Modelos de Análisis del Problema 5
+6.1. Modelo de Contexto y Actores 5
+6.2. Diagrama de Casos de Uso 6
+6.3. Modelo Conceptual de Dominio 7
+6.4. Diagramas de Actividad 7
+7. Diseño de la Solución 18
+7.1. Arquitectura general del sistema 18
+7.2. Diagrama de secuencia general del sistema 19
+7.3. Diseño de la Dimensión HCI e Interacción 20
+7.4. Diseño de la Dimensión XR/AR (Entorno y Espacio) 20
+7.5. Diseño del componente de IA / Machine Learning 22
+8. Resultados Preliminares de Prototipado 23
+8.1. Bocetos y Wireframes (Baja Fidelidad) 23
+9. Plan de Implementación Técnica 23
+10. Estrategia de Evaluación 26
+10.1. Evaluación HCI 26
+10.2. Evaluación IA 28
+10.3. Evaluación XR/AR 28
+11. Referencias 30
+12. Anexo: Sesiones con Herramientas de IA 30
+1. Título del Proyecto
+“Entrenamiento Inmersivo de Comunicación Clínica: Gestión de Crisis en Salud Mental
+mediante Avatar afectivo en VR”
+2. Datos del Estudiante
+Washington Andres Apolo Escobar
+washington.apolo@unl.edu.ec
+Universidad Nacional de Loja - Facultad de la Energía, las Industrias y los Recursos
+Naturales No Renovables
+Carrera de Computación - 7mo Ciclo.
+3. Definición del Problema
+3.1. Contexto general
+En la formación de profesionales de la salud en habilidades de comunicación clínica para
+manejo de crisis emocionales carece de entornos seguros y reproducibles para la práctica. El
+role-play tradicional es costoso y no ofrece retroalimentación objetiva. Este proyecto propone
+un sistema de entrenamiento en VR donde un estudiante interactúa verbalmente con un avatar
+paciente conversacional (impulsado por IA generativa) que simula una crisis de ansiedad,
+permitiendo práctica segura con feedback visual inmediato sobre el impacto emocional de sus
+intervenciones.
+La literatura reciente muestra que las simulaciones con pacientes virtuales en VR son
+prometedoras para entrenar habilidades de comunicación clínica y empatía en contextos como
+psiquiatría y geriatría, permitiendo situaciones difíciles sin poner en riesgo a pacientes reales
+[1].
+Este proyecto propone un entorno de realidad virtual donde el estudiante interactúa con un
+avatar paciente (ECA) que responde con lenguaje verbal y no verbal, modulando sus
+emociones de acuerdo al tono y contenido del usuario, y ofreciendo feedback inmediato sobre
+el “estado emocional” del paciente.
+3.2. Dimensión HCI
+Desde HCI, el problema incluye:
+Procesos perceptuales donde el estudiante (usuario) debe interpretar correctamente
+expresiones faciales, postura, mirada, tono de voz y el indicador visual (barra de estrés). Se
+busca controlar la carga cognitiva para que el estudiante se concentre en la comunicación y no
+en aprender a manejar una interfaz compleja.
+Los posibles problemas de usabilidad que se deben abordar recaerá en menús flotantes y
+paneles sobrecargados, en VR aumentan la carga mental y la desorientación. En relación a la
+visibilidad del estado del sistema, el estudiante puede que no sepa si el avatar está más
+calmado o más tenso. Siempre debe existir retroalimentación clara sobre su desempeño
+comunicacional. Por ello se define el principio de HCI de la usabilidad definiendo los
+procesos que se ejecutarán según las heurísticas de Nielsen.
+Heurísticas de Nielsen
+Visibilidad del estado del sistema: se tiene que materializar en una barra sutil de nivel de
+estrés/ansiedad del paciente y micro-expresiones faciales.
+Correspondencia entre el sistema y el mundo real: el avatar usa patrones de comunicación
+verbal/no verbal semejantes a una persona real en consulta.
+Control y libertad del usuario: el estudiante puede pausar, reiniciar la sesión o cambiar el
+escenario clínico.
+Consistencia y estándares: se mantienen patrones visuales y de interacción coherentes en
+todos los escenarios VR.
+Minimizar carga de memoria del usuario: la interacción es 100% conversacional y gestual,
+evitando recordar combinaciones de botones.
+3.3. Dimensión XR/AR
+Se requiere un entorno inmersivo de VR porque la presencia y la inmersión aumentan el
+realismo de la interacción con el paciente, mejorando la transferencia de habilidades a la
+práctica clínica real [5].
+La realidad virtual permite simular contextos emocionalmente cargados como lo serían salas
+de emergencias, consulta de salud mental o hasta un pasillo de hospital, controlando así
+variables de ruido, espacio y proximidad. La percepción espacial, distancia interpersonal y
+orientación corporal del avatar influyen directamente en la interpretación emocional, algo
+difícil de replicar en 2D.
+La VR, por tanto, mejora la comprensión del usuario al integrar señales visuales, auditivas y
+espaciales en un solo entorno coherente que replica una consulta real.
+3.4. Dimensión IA
+El problema no es solo generar texto y que pase por una IA Text-to-Speech, sino modelar el
+comportamiento emocional de un paciente virtual, por ello, se necesitan modelos inteligentes
+primeramente para interpretar el rol de una persona en crisis, además de analizar la entrada
+del usuario a partir de voz y lenguaje (análisis de sentimiento y reconocimiento las
+características acústicas), y para generar respuestas del avatar que incluyan contenido verbal y
+tono emocional coherente con la situación.
+Los patrones a reconocer / clasificar / predecir son:
+● Clases de emoción del usuario (calmado, empático, hostil, evasivo, neutro).
+● Nivel de estrés del paciente virtual (variable interna continua que se actualiza tras cada
+turno).
