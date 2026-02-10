@@ -6,6 +6,7 @@ using System.Collections;
 using System.Collections.Generic;
 using AvatarXR.UI;
 using GoogleTextToSpeech.Scripts; // Nuevo using
+using AvatarXR.Avatar;
 
 namespace AvatarXR.Managers
 {
@@ -18,6 +19,7 @@ namespace AvatarXR.Managers
         [Header("Referencias del Avatar")]
         [SerializeField] private Transform avatarPlaceholder;
         [SerializeField] private Transform avatarSeatPosition;
+        [SerializeField] private AvatarLoader avatarLoader; // Reference to AvatarLoader
 
         [Header("Barra de Estrés (Diegética)")]
         [SerializeField] private GameObject stressBarObject;
@@ -105,6 +107,18 @@ namespace AvatarXR.Managers
             if (menuStateManager == null)
             {
                 menuStateManager = FindObjectOfType<MenuStateManager>();
+            }
+
+            // Buscar AvatarLoader si no está asignado
+            if (avatarLoader == null)
+            {
+                avatarLoader = FindObjectOfType<AvatarLoader>();
+            }
+
+            // Asignar posición de asiento si está disponible
+            if (avatarLoader != null && avatarSeatPosition != null)
+            {
+                avatarLoader.SetSpawnPoint(avatarSeatPosition);
             }
 
             // Suscribirse a eventos del MenuStateManager

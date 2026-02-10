@@ -295,18 +295,55 @@ namespace AvatarXR.Managers
             else
             {
                 Debug.LogWarning("[ConversationController] TTS falló, simulando...");
-                yield return SimulateSpeech(text);
+                yield return StartCoroutine(SimulateSpeech(text));
             }
         }
 
         private IEnumerator SimulateSpeech(string text)
         {
-            float duration = 3f + (text.Length * 0.1f); // Estimar duración
+            float duration = 2f + (text.Length * 0.05f); 
             Debug.Log($"[ConversationController] Simulando habla por {duration}s: {text}");
             
+            // Play a "mumble" tone
+            if (GetComponent<AudioSource>() != null)
+            {
+                AudioClip clip = CreateToneAudioClip(440, duration);
+                GetComponent<AudioSource>().PlayOneShot(clip);
+            }
+            else
+            {
+                 // Try to find avatar audio source
+                 var avatarLoader = FindObjectOfType<AvatarLoader>();
+                 if (avatarLoader != null && avatarLoader.LoadedAvatar != null)
+                 {
+                     var audio = avatarLoader.LoadedAvatar.GetComponent<AudioSource>();
+                     if (audio != null)
+                     {
+                         AudioClip clip = CreateToneAudioClip(440, duration);
+                         audio.PlayOneShot(clip);
+                     }
+                 }
+            }
+
             yield return new WaitForSeconds(duration);
             
             OnAvatarFinishedSpeaking();
+        }
+
+        private AudioClip CreateToneAudioClip(int frequency, float duration)
+        {
+            int sampleRate = 44100;
+            int samples = (int)(sampleRate * duration);
+            float[] data = new float[samples];
+            
+            for (int i = 0; i < samples; i++)
+            {
+                data[i] = Mathf.Sin(2 * Mathf.PI * frequency * i / sampleRate);
+            }
+            
+            AudioClip clip = AudioClip.Create("Tone", samples, 1, sampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
         }
 
         private void OnAvatarReady(GameObject avatar)

@@ -7,6 +7,7 @@ namespace AvatarXR.Avatar
 {
     /// <summary>
     /// Carga y configura avatares de Ready Player Me.
+    /// Actualizado para soportar Microsoft Rocketbox.
     /// </summary>
     public class AvatarLoader : MonoBehaviour
     {
@@ -21,6 +22,14 @@ namespace AvatarXR.Avatar
         
         [Header("Audio")]
         [SerializeField] private bool setupAudioSource = true;
+
+        /// <summary>
+        /// Establece el punto de aparición del avatar.
+        /// </summary>
+        public void SetSpawnPoint(Transform point)
+        {
+            spawnPoint = point;
+        }
         
         private GameObject loadedAvatar;
         private SkinnedMeshRenderer faceMeshRenderer;
@@ -43,6 +52,9 @@ namespace AvatarXR.Avatar
         private int mouthSmileLeftIndex = -1;
         private int mouthSmileRightIndex = -1;
         private int jawOpenIndex = -1;
+
+        // Referencia al controlador de Rocketbox
+        private RocketboxAvatarController rocketboxController;
 
         public GameObject LoadedAvatar => loadedAvatar;
         public AudioSource AvatarAudioSource => avatarAudioSource;
@@ -72,11 +84,23 @@ namespace AvatarXR.Avatar
         
         private void LoadFromPrefab()
         {
-            // Instanciar el prefab local
-            loadedAvatar = Instantiate(avatarPrefab);
-            loadedAvatar.name = "Avatar_Paciente";
+            // Intentar encontrar avatar existente en la escena primero
+            GameObject existingAvatar = GameObject.Find("Male_Adult_01");
+            if (existingAvatar == null) existingAvatar = GameObject.Find("Avatar_Paciente");
+
+            if (existingAvatar != null)
+            {
+                loadedAvatar = existingAvatar;
+                Debug.Log($"[AvatarLoader] ✅ Found existing avatar in scene: {loadedAvatar.name}");
+            }
+            else
+            {
+                // Instanciar el prefab local si no existe
+                loadedAvatar = Instantiate(avatarPrefab);
+                loadedAvatar.name = "Avatar_Paciente";
+                Debug.Log("[AvatarLoader] ✅ Avatar instantiated from local prefab");
+            }
             
-            Debug.Log("[AvatarLoader] ✅ Avatar instanciado desde prefab local");
             SetupLoadedAvatar();
         }
 
@@ -130,11 +154,9 @@ namespace AvatarXR.Avatar
             }
             else
             {
-                // Posición por defecto: frente al usuario
-                loadedAvatar.transform.position = Camera.main.transform.position + 
-                    Camera.main.transform.forward * distanceFromUser;
-                loadedAvatar.transform.LookAt(Camera.main.transform);
-                loadedAvatar.transform.rotation = Quaternion.Euler(0, loadedAvatar.transform.rotation.eulerAngles.y + 180, 0);
+                // Posición fija solicitada por usuario (Adjusted for sitting)
+                loadedAvatar.transform.position = new Vector3(1.43f, 0.05f, 1.079413f);
+                loadedAvatar.transform.rotation = Quaternion.Euler(0f, -90f, 0f);
             }
             
             // Buscar SkinnedMeshRenderer para blendshapes
@@ -148,6 +170,37 @@ namespace AvatarXR.Avatar
             {
                 SetupAudio();
             }
+
+            // *** Nuevo soporte para Rocketbox / Animator ***
+            Animator animator = loadedAvatar.GetComponent<Animator>();
+            if (animator != null)
+            {
+                // Si tiene Animator (Rocketbox), añadir controlador si no existe
+                rocketboxController = loadedAvatar.GetComponent<RocketboxAvatarController>();
+                if (rocketboxController == null)
+                {
+                    rocketboxController = loadedAvatar.AddComponent<RocketboxAvatarController>();
+                }
+                
+                // Asignar controlador de animaciones generado si no tiene uno
+                if (animator.runtimeAnimatorController == null)
+                {
+                    Debug.LogWarning("[AvatarLoader] El avatar tiene Animator pero no Controller. Asegúrate de asignar 'PatientAnimator' al prefab o usar RocketboxSetup.");
+                }
+
+                // Inicializar estado
+                rocketboxController.SetStressLevel(currentStressLevel);
+            }
+            
+            // Lock position to prevent sinking during animations
+            var posLock = loadedAvatar.GetComponent<AvatarPositionLock>();
+            if (posLock == null)
+            {
+                posLock = loadedAvatar.AddComponent<AvatarPositionLock>();
+                posLock.lockedY = 0.05f;
+                posLock.lockY = true;
+                Debug.Log("[AvatarLoader] ✅ AvatarPositionLock added");
+            }
             
             Debug.Log("[AvatarLoader] ✅ Avatar configurado correctamente");
             OnAvatarLoaded?.Invoke(loadedAvatar);
@@ -155,28 +208,41 @@ namespace AvatarXR.Avatar
 
         private void SetupBlendshapes()
         {
-            faceMeshRenderer = loadedAvatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            // Try specific names common in Rocketbox/RPM
+            faceMeshRenderer = loadedAvatar.transform.Find("face")?.GetComponent<SkinnedMeshRenderer>();
+            if (faceMeshRenderer == null) faceMeshRenderer = loadedAvatar.transform.Find("Body")?.GetComponent<SkinnedMeshRenderer>();
+            if (faceMeshRenderer == null) faceMeshRenderer = loadedAvatar.GetComponentInChildren<SkinnedMeshRenderer>();
             
             if (faceMeshRenderer == null || faceMeshRenderer.sharedMesh == null)
             {
-                Debug.LogWarning("[AvatarLoader] No se encontró SkinnedMeshRenderer para blendshapes");
+                Debug.LogWarning("[AvatarLoader] No se encontró SkinnedMeshRenderer para blendshapes (Buscado: face, Body, Children)");
                 return;
             }
             
             Mesh mesh = faceMeshRenderer.sharedMesh;
             
-            // Mapear blendshapes ARKit estándar de Ready Player Me
-            browDownLeftIndex = mesh.GetBlendShapeIndex("browDownLeft");
-            browDownRightIndex = mesh.GetBlendShapeIndex("browDownRight");
-            eyeLookDownLeftIndex = mesh.GetBlendShapeIndex("eyeLookDownLeft");
-            eyeLookDownRightIndex = mesh.GetBlendShapeIndex("eyeLookDownRight");
-            mouthFrownLeftIndex = mesh.GetBlendShapeIndex("mouthFrownLeft");
-            mouthFrownRightIndex = mesh.GetBlendShapeIndex("mouthFrownRight");
-            mouthSmileLeftIndex = mesh.GetBlendShapeIndex("mouthSmileLeft");
-            mouthSmileRightIndex = mesh.GetBlendShapeIndex("mouthSmileRight");
-            jawOpenIndex = mesh.GetBlendShapeIndex("jawOpen");
+            // Mapear blendshapes, intentando varios nombres comunes
+            browDownLeftIndex = FindBlendShape(mesh, "browDownLeft", "Brows D L", "Brows Down Left");
+            browDownRightIndex = FindBlendShape(mesh, "browDownRight", "Brows D R", "Brows Down Right");
+            eyeLookDownLeftIndex = FindBlendShape(mesh, "eyeLookDownLeft", "Eyes Look D L");
+            eyeLookDownRightIndex = FindBlendShape(mesh, "eyeLookDownRight", "Eyes Look D R");
+            mouthFrownLeftIndex = FindBlendShape(mesh, "mouthFrownLeft", "Frown L");
+            mouthFrownRightIndex = FindBlendShape(mesh, "mouthFrownRight", "Frown R");
+            mouthSmileLeftIndex = FindBlendShape(mesh, "mouthSmileLeft", "Smile L");
+            mouthSmileRightIndex = FindBlendShape(mesh, "mouthSmileRight", "Smile R");
+            jawOpenIndex = FindBlendShape(mesh, "jawOpen", "Jaw Open", "Mouth Open");
             
-            Debug.Log($"[AvatarLoader] Blendshapes mapeados. Total: {mesh.blendShapeCount}");
+            Debug.Log($"[AvatarLoader] Blendshapes mapeados. Total Mesh: {mesh.blendShapeCount}. JawIndex: {jawOpenIndex}");
+        }
+
+        private int FindBlendShape(Mesh mesh, params string[] names)
+        {
+            foreach (var name in names)
+            {
+                int index = mesh.GetBlendShapeIndex(name);
+                if (index != -1) return index;
+            }
+            return -1;
         }
 
         private void SetupAudio()
@@ -200,24 +266,32 @@ namespace AvatarXR.Avatar
         {
             currentStressLevel = Mathf.Clamp(stressLevel, 0, 10);
             
-            if (faceMeshRenderer == null) return;
-            
-            float intensity = currentStressLevel / 10f;
-            
-            // Estrés alto = ceño fruncido, mirada baja, gesto tenso
-            SetBlendshapeWeight(browDownLeftIndex, intensity * 60f);
-            SetBlendshapeWeight(browDownRightIndex, intensity * 60f);
-            SetBlendshapeWeight(eyeLookDownLeftIndex, intensity * 40f);
-            SetBlendshapeWeight(eyeLookDownRightIndex, intensity * 40f);
-            
-            // Estrés bajo = sonrisa
-            float smileIntensity = Mathf.Clamp01(1f - intensity) * 0.5f;
-            SetBlendshapeWeight(mouthSmileLeftIndex, smileIntensity * 100f);
-            SetBlendshapeWeight(mouthSmileRightIndex, smileIntensity * 100f);
-            
-            // Frown en estrés alto
-            SetBlendshapeWeight(mouthFrownLeftIndex, intensity * 40f);
-            SetBlendshapeWeight(mouthFrownRightIndex, intensity * 40f);
+            // Actualizar Rocketbox Animator (Cuerpo)
+            if (rocketboxController != null)
+            {
+                rocketboxController.SetStressLevel(currentStressLevel);
+            }
+
+            // Actualizar Blendshapes (Cara - si existen)
+            if (faceMeshRenderer != null)
+            {
+                float intensity = currentStressLevel / 10f;
+                
+                // Estrés alto = ceño fruncido, mirada baja, gesto tenso
+                SetBlendshapeWeight(browDownLeftIndex, intensity * 60f);
+                SetBlendshapeWeight(browDownRightIndex, intensity * 60f);
+                SetBlendshapeWeight(eyeLookDownLeftIndex, intensity * 40f);
+                SetBlendshapeWeight(eyeLookDownRightIndex, intensity * 40f);
+                
+                // Estrés bajo = sonrisa
+                float smileIntensity = Mathf.Clamp01(1f - intensity) * 0.5f;
+                SetBlendshapeWeight(mouthSmileLeftIndex, smileIntensity * 100f);
+                SetBlendshapeWeight(mouthSmileRightIndex, smileIntensity * 100f);
+                
+                // Frown en estrés alto
+                SetBlendshapeWeight(mouthFrownLeftIndex, intensity * 40f);
+                SetBlendshapeWeight(mouthFrownRightIndex, intensity * 40f);
+            }
         }
 
         private void SetBlendshapeWeight(int index, float weight)
@@ -235,10 +309,23 @@ namespace AvatarXR.Avatar
         {
             if (avatarAudioSource == null || clip == null) return;
             
+            // Activar animación de hablar en Rocketbox
+            if (rocketboxController != null)
+            {
+                rocketboxController.SetTalking(true);
+            }
+
             avatarAudioSource.clip = clip;
             avatarAudioSource.Play();
             
-            StartCoroutine(LipSyncCoroutine(clip.length, onComplete));
+            StartCoroutine(LipSyncCoroutine(clip.length, () => {
+                // Al terminar de hablar
+                if (rocketboxController != null)
+                {
+                    rocketboxController.SetTalking(false);
+                }
+                onComplete?.Invoke();
+            }));
         }
 
         private IEnumerator LipSyncCoroutine(float duration, System.Action onComplete)
@@ -248,7 +335,8 @@ namespace AvatarXR.Avatar
             while (elapsed < duration)
             {
                 // Lip-sync básico: jaw open siguiendo el audio
-                if (avatarAudioSource.isPlaying)
+                // Solo si tenemos blendshapes (si no, Rocketbox hace movimiento de cuerpo solamente)
+                if (avatarAudioSource.isPlaying && faceMeshRenderer != null)
                 {
                     float[] samples = new float[256];
                     avatarAudioSource.GetOutputData(samples, 0);
@@ -268,7 +356,10 @@ namespace AvatarXR.Avatar
             }
             
             // Cerrar boca al terminar
-            SetBlendshapeWeight(jawOpenIndex, 0f);
+            if (faceMeshRenderer != null)
+            {
+                SetBlendshapeWeight(jawOpenIndex, 0f);
+            }
             
             onComplete?.Invoke();
         }

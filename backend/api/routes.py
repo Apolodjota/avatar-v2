@@ -16,13 +16,28 @@ def get_services():
     """Inicializa los servicios de IA de forma lazy."""
     global _whisper, _emotion_clf, _llm, _tts
     
+    # Whisper: Intentar cargar real, si falla usar mock
     if _whisper is None:
+        print("=" * 60)
+        print("🔧 Inicializando Whisper STT...")
         try:
             from services.whisper_stt import get_whisper_service
+            print("📦 Módulo whisper_stt importado")
             _whisper = get_whisper_service()
+            print("✅ WhisperSTT real cargado exitosamente")
         except Exception as e:
-            print(f"⚠️ Error cargando Whisper: {e}")
-            _whisper = None
+            print(f"❌ Error cargando Whisper real: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            print("⚠️ Usando MockWhisper para pruebas")
+            try:
+                from services.mock_whisper import get_mock_whisper_service
+                _whisper = get_mock_whisper_service()
+                print("✅ MockWhisper cargado")
+            except Exception as e2:
+                print(f"❌ Error cargando MockWhisper: {e2}")
+                _whisper = None
+        print("=" * 60)
     
     if _emotion_clf is None:
         try:
@@ -40,13 +55,20 @@ def get_services():
             print(f"⚠️ Error cargando LLMService: {e}")
             _llm = None
     
+    # TTS: Usar simple_tts (no requiere credenciales)
     if _tts is None:
         try:
-            from services.tts_service import TTSService
-            _tts = TTSService()
+            from services.simple_tts import SimpleTTSService
+            _tts = SimpleTTSService()
+            print("✅ Usando SimpleTTSService (gTTS)")
         except Exception as e:
-            print(f"⚠️ Error cargando TTSService: {e}")
-            _tts = None
+            print(f"⚠️ Error cargando SimpleTTS: {e}")
+            # Intentar TTS original si existe
+            try:
+                from services.tts_service import TTSService
+                _tts = TTSService()
+            except:
+                _tts = None
     
     return _whisper, _emotion_clf, _llm, _tts
 
@@ -90,14 +112,21 @@ async def process_user_audio(
             raise HTTPException(status_code=503, detail="Servicio Whisper no disponible")
         
         # 1. Transcribir
+        print(f"🎤 Transcribiendo audio: {audio_path}")
         transcription = whisper.transcribe(audio_path)
         user_text = transcription["text"]
+        print(f"📝 Transcripción: '{user_text}'")
         
         # 2. Clasificar emoción
         if emotion_clf is not None:
-            emotion_result = emotion_clf.classify(audio_path)
-            user_emotion = emotion_result["emotion"]
-            emotion_confidence = emotion_result["confidence"]
+            try:
+                emotion_result = emotion_clf.classify(audio_path)
+                user_emotion = emotion_result["emotion"]
+                emotion_confidence = emotion_result["confidence"]
+            except Exception as e:
+                print(f"⚠️ Error en clasificación de emoción: {e}")
+                user_emotion = "neutro"
+                emotion_confidence = 0.5
         else:
             user_emotion = "neutro"
             emotion_confidence = 0.5
@@ -114,12 +143,16 @@ async def process_user_audio(
         
         # 4. Generar respuesta del avatar
         if llm is not None:
-            avatar_response = llm.generate_response(
-                user_input=user_text,
-                stress_level=new_stress,
-                conversation_history=[],  # TODO: pasar historial real
-                turn_count=turn_count + 1
-            )
+            try:
+                avatar_response = llm.generate_response(
+                    user_input=user_text,
+                    stress_level=new_stress,
+                    conversation_history=[],  # TODO: pasar historial real
+                    turn_count=turn_count + 1
+                )
+            except Exception as e:
+                print(f"⚠️ Error en LLM: {e}")
+                avatar_response = "Entiendo lo que me dices... necesito un momento para pensar."
         else:
             avatar_response = "Entiendo lo que me dices... necesito un momento para pensar."
         
@@ -160,6 +193,7 @@ async def process_user_audio(
                 print(f"⚠️ No se pudo guardar turno en BD: {e}")
         
         # 7. Retornar resultados
+        print(f"✅ Procesamiento completado: '{user_text}' -> '{avatar_response}'")
         return {
             "transcription": user_text,
             "user_emotion": user_emotion,
@@ -170,6 +204,14 @@ async def process_user_audio(
             "audio_url": f"/static/{audio_output_filename}" if audio_output_filename else None,
             "turn_number": turn_count + 1
         }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ ERROR CRÍTICO en /process-audio: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
         
     finally:
         # Limpiar audio de entrada
