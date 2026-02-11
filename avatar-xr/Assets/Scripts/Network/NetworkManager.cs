@@ -37,6 +37,7 @@ namespace AvatarXR.Network
 
     /// <summary>
     /// Manager singleton para comunicación HTTP con el backend de IA.
+    /// v2: Agrega soporte para session_id en process-audio.
     /// </summary>
     public class NetworkManager : MonoBehaviour
     {
@@ -44,7 +45,7 @@ namespace AvatarXR.Network
 
         [Header("Configuración del Backend")]
         [SerializeField] private string baseUrl = "http://localhost:8000";
-        [SerializeField] private float timeout = 30f;
+        [SerializeField] private float timeout = 60f;
 
         public bool IsConnected { get; private set; }
         public event Action<bool> OnConnectionStatusChanged;
@@ -94,9 +95,6 @@ namespace AvatarXR.Network
             }
         }
 
-        /// <summary>
-        /// Inicia una nueva sesión de entrenamiento.
-        /// </summary>
         public IEnumerator StartSession(Action<SessionStartResponse> callback)
         {
             string url = $"{baseUrl}/api/session/start";
@@ -121,7 +119,7 @@ namespace AvatarXR.Network
         }
 
         /// <summary>
-        /// Procesa el audio del usuario y obtiene respuesta del avatar.
+        /// Procesa audio (versión original sin session_id, por compatibilidad).
         /// </summary>
         public IEnumerator ProcessAudio(
             byte[] audioData,
@@ -130,9 +128,26 @@ namespace AvatarXR.Network
             Action<AudioProcessResponse> callback
         )
         {
-            string url = $"{baseUrl}/api/process-audio?stress_level={currentStress}&turn_count={turnCount}";
+            yield return ProcessAudioWithSession(audioData, currentStress, turnCount, null, callback);
+        }
 
-            // Crear formulario con el audio
+        /// <summary>
+        /// Procesa audio del usuario con session_id para historial de conversación.
+        /// </summary>
+        public IEnumerator ProcessAudioWithSession(
+            byte[] audioData,
+            int currentStress,
+            int turnCount,
+            string sessionId,
+            Action<AudioProcessResponse> callback
+        )
+        {
+            string url = $"{baseUrl}/api/process-audio?stress_level={currentStress}&turn_count={turnCount}";
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                url += $"&session_id={sessionId}";
+            }
+
             WWWForm form = new WWWForm();
             form.AddBinaryData("audio", audioData, "recording.wav", "audio/wav");
 
@@ -150,17 +165,14 @@ namespace AvatarXR.Network
                 else
                 {
                     Debug.LogError($"[NetworkManager] Error procesando audio: {request.error}");
+                    Debug.LogError($"[NetworkManager] Response body: {request.downloadHandler?.text}");
                     callback?.Invoke(null);
                 }
             }
         }
 
-        /// <summary>
-        /// Descarga el audio de respuesta del avatar.
-        /// </summary>
         public IEnumerator DownloadAudio(string audioUrl, Action<AudioClip> callback)
         {
-            // Construir URL completa si es relativa
             string fullUrl = audioUrl.StartsWith("http") ? audioUrl : $"{baseUrl}{audioUrl}";
 
             using (UnityWebRequest request = UnityWebRequestMultimedia.GetAudioClip(fullUrl, AudioType.MPEG))
@@ -182,14 +194,10 @@ namespace AvatarXR.Network
             }
         }
 
-        /// <summary>
-        /// Sintetiza texto a voz usando el backend.
-        /// </summary>
         public IEnumerator SynthesizeText(string text, int stressLevel, Action<SynthesizeTextResponse> callback)
         {
             string url = $"{baseUrl}/api/synthesize-text";
             
-            // Crear JSON body
             string jsonBody = JsonUtility.ToJson(new SynthesizeRequest { text = text, stress_level = stressLevel });
             byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
 
@@ -223,9 +231,6 @@ namespace AvatarXR.Network
             public int stress_level;
         }
 
-        /// <summary>
-        /// Cambia la URL base del backend.
-        /// </summary>
         public void SetBaseUrl(string url)
         {
             baseUrl = url;

@@ -16,20 +16,15 @@ def get_services():
     """Inicializa los servicios de IA de forma lazy."""
     global _whisper, _emotion_clf, _llm, _tts
     
-    # Whisper: Intentar cargar real, si falla usar mock
     if _whisper is None:
         print("=" * 60)
         print("🔧 Inicializando Whisper STT...")
         try:
             from services.whisper_stt import get_whisper_service
-            print("📦 Módulo whisper_stt importado")
             _whisper = get_whisper_service()
             print("✅ WhisperSTT real cargado exitosamente")
         except Exception as e:
             print(f"❌ Error cargando Whisper real: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            print("⚠️ Usando MockWhisper para pruebas")
             try:
                 from services.mock_whisper import get_mock_whisper_service
                 _whisper = get_mock_whisper_service()
@@ -55,7 +50,6 @@ def get_services():
             print(f"⚠️ Error cargando LLMService: {e}")
             _llm = None
     
-    # TTS: Usar simple_tts (no requiere credenciales)
     if _tts is None:
         try:
             from services.simple_tts import SimpleTTSService
@@ -63,7 +57,6 @@ def get_services():
             print("✅ Usando SimpleTTSService (gTTS)")
         except Exception as e:
             print(f"⚠️ Error cargando SimpleTTS: {e}")
-            # Intentar TTS original si existe
             try:
                 from services.tts_service import TTSService
                 _tts = TTSService()
@@ -72,10 +65,12 @@ def get_services():
     
     return _whisper, _emotion_clf, _llm, _tts
 
+
 class ConversationTurn(BaseModel):
     stress_level: int
     conversation_history: list
     turn_count: int
+
 
 @router.post("/process-audio")
 async def process_user_audio(
@@ -86,17 +81,7 @@ async def process_user_audio(
 ):
     """
     Endpoint principal: procesar audio del usuario y generar respuesta del avatar.
-    
-    Pipeline:
-    1. Guardar audio temporal
-    2. Transcribir con Whisper
-    3. Clasificar emoción
-    4. Actualizar nivel de estrés
-    5. Generar respuesta con LLM
-    6. Sintetizar voz
-    7. Retornar todo
     """
-    # Guardar audio temporal
     temp_id = str(uuid.uuid4())
     audio_path = f"temp/{temp_id}.wav"
     os.makedirs("temp", exist_ok=True)
@@ -105,33 +90,39 @@ async def process_user_audio(
         f.write(await audio.read())
     
     try:
-        # Obtener servicios
         whisper, emotion_clf, llm, tts = get_services()
         
         if whisper is None:
             raise HTTPException(status_code=503, detail="Servicio Whisper no disponible")
         
-        # 1. Transcribir
-        print(f"🎤 Transcribiendo audio: {audio_path}")
+        # 1. Verificar que el audio no está vacío/silencioso
+        audio_size = os.path.getsize(audio_path)
+        print(f"🎤 Transcribiendo audio: {audio_path} ({audio_size} bytes)")
+        
+        # 2. Transcribir
         transcription = whisper.transcribe(audio_path)
-        user_text = transcription["text"]
+        user_text = transcription["text"].strip()
         print(f"📝 Transcripción: '{user_text}'")
         
-        # 2. Clasificar emoción
-        if emotion_clf is not None:
+        # 3. Si la transcripción está vacía, marcar como tal
+        is_empty_input = len(user_text) < 3
+        if is_empty_input:
+            print("⚠️ Transcripción vacía o muy corta - posible audio silencioso")
+            user_text = ""  # Mantener vacío para que el LLM sepa
+        
+        # 4. Clasificar emoción
+        user_emotion = "neutro"
+        emotion_confidence = 0.5
+        
+        if not is_empty_input and emotion_clf is not None:
             try:
                 emotion_result = emotion_clf.classify(audio_path)
                 user_emotion = emotion_result["emotion"]
                 emotion_confidence = emotion_result["confidence"]
             except Exception as e:
                 print(f"⚠️ Error en clasificación de emoción: {e}")
-                user_emotion = "neutro"
-                emotion_confidence = 0.5
-        else:
-            user_emotion = "neutro"
-            emotion_confidence = 0.5
         
-        # 3. Actualizar estrés basado en emoción
+        # 5. Actualizar estrés basado en emoción
         stress_delta = {
             "empatico": -2,
             "hostil": +2,
@@ -139,24 +130,29 @@ async def process_user_audio(
             "ansioso": +1
         }.get(user_emotion, 0)
         
+        # Si input vacío, no cambiar estrés
+        if is_empty_input:
+            stress_delta = 0
+        
         new_stress = max(0, min(10, stress_level + stress_delta))
         
-        # 4. Generar respuesta del avatar
+        # 6. Generar respuesta del avatar CON historial de sesión
         if llm is not None:
             try:
                 avatar_response = llm.generate_response(
                     user_input=user_text,
                     stress_level=new_stress,
-                    conversation_history=[],  # TODO: pasar historial real
-                    turn_count=turn_count + 1
+                    conversation_history=[],  # El LLM ahora maneja el historial internamente
+                    turn_count=turn_count + 1,
+                    session_id=session_id  # NUEVO: pasar session_id para historial
                 )
             except Exception as e:
                 print(f"⚠️ Error en LLM: {e}")
-                avatar_response = "Entiendo lo que me dices... necesito un momento para pensar."
+                avatar_response = _get_emergency_response(new_stress, is_empty_input)
         else:
-            avatar_response = "Entiendo lo que me dices... necesito un momento para pensar."
+            avatar_response = _get_emergency_response(new_stress, is_empty_input)
         
-        # 5. Sintetizar voz
+        # 7. Sintetizar voz
         audio_output_filename = f"{temp_id}_response.mp3"
         audio_output_path = f"temp/{audio_output_filename}"
         
@@ -173,7 +169,7 @@ async def process_user_audio(
             print(f"⚠️ Error en TTS: {e}")
             audio_output_filename = None
         
-        # 6. Guardar turno en base de datos
+        # 8. Guardar turno en BD
         if session_id:
             try:
                 from services.database import get_db
@@ -192,7 +188,6 @@ async def process_user_audio(
             except Exception as e:
                 print(f"⚠️ No se pudo guardar turno en BD: {e}")
         
-        # 7. Retornar resultados
         print(f"✅ Procesamiento completado: '{user_text}' -> '{avatar_response}'")
         return {
             "transcription": user_text,
@@ -214,9 +209,25 @@ async def process_user_audio(
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
         
     finally:
-        # Limpiar audio de entrada
         if os.path.exists(audio_path):
             os.remove(audio_path)
+
+
+def _get_emergency_response(stress_level: int, is_empty: bool) -> str:
+    """Respuesta de emergencia cuando ni el LLM ni las offline funcionan."""
+    import random
+    if is_empty:
+        return random.choice([
+            "Perdón... ¿decías algo? Es que estoy un poco distraído.",
+            "No te escuché bien... lo siento, estoy nervioso.",
+        ])
+    if stress_level >= 7:
+        return "Es que... no sé cómo explicarlo. Todo me supera últimamente."
+    elif stress_level >= 4:
+        return "Sí... entiendo. Es difícil hablar de esto."
+    else:
+        return "Gracias... creo que hablar de esto me ayuda un poco."
+
 
 @router.get("/session/start")
 async def start_session(user_id: str = Query(None)):
@@ -225,7 +236,6 @@ async def start_session(user_id: str = Query(None)):
     initial_stress = int(os.getenv("STRESS_INITIAL_LEVEL", 7))
     timestamp = datetime.utcnow()
     
-    # Persistir en base de datos
     try:
         from services.database import get_db
         db = await get_db()
@@ -311,12 +321,7 @@ class SynthesizeRequest(BaseModel):
 
 @router.post("/synthesize-text")
 async def synthesize_text(request: SynthesizeRequest):
-    """
-    Sintetizar texto a voz sin necesidad de audio de entrada.
-    Útil para el saludo inicial del avatar.
-    """
-    import uuid
-    
+    """Sintetizar texto a voz."""
     temp_id = str(uuid.uuid4())
     audio_output_filename = f"{temp_id}_tts.mp3"
     audio_output_path = f"temp/{audio_output_filename}"
@@ -328,25 +333,19 @@ async def synthesize_text(request: SynthesizeRequest):
         if tts is None:
             raise HTTPException(status_code=503, detail="Servicio TTS no disponible")
         
-        try:
-            if tts is not None:
-                tts.synthesize(
-                    text=request.text,
-                    stress_level=request.stress_level,
-                    output_path=audio_output_path
-                )
-            else:
-                audio_output_filename = None
-        except Exception as e:
-            print(f"⚠️ Error en TTS (synthesize-text): {e}")
-            audio_output_filename = None
+        tts.synthesize(
+            text=request.text,
+            stress_level=request.stress_level,
+            output_path=audio_output_path
+        )
         
         return {
             "text": request.text,
-            "audio_url": f"/static/{audio_output_filename}" if audio_output_filename else None,
+            "audio_url": f"/static/{audio_output_filename}",
             "stress_level": request.stress_level
         }
     except HTTPException:
         raise
     except Exception as e:
+        print(f"⚠️ Error en TTS: {e}")
         raise HTTPException(status_code=500, detail=str(e))

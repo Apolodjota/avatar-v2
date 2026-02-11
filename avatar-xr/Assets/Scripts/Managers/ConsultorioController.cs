@@ -61,6 +61,9 @@ namespace AvatarXR.Managers
         [SerializeField] private Color micProcessingColor = new Color(0.9f, 0.7f, 0.1f, 1f);
         [SerializeField] private Color micClosedColor = new Color(0.5f, 0.5f, 0.5f, 1f);
 
+        [Header("HUD de Micrófono (Screen Space)")]
+        [SerializeField] private AvatarXR.UI.MicHUDController micHUD;
+
         [Header("Google / Gemini Integration")]
         [SerializeField] private UnityAndGeminiV3 geminiManager;
         [SerializeField] private TextToSpeechManager textToSpeechManager;
@@ -77,6 +80,11 @@ namespace AvatarXR.Managers
         private bool isPaused;
         private bool sessionEnded;
         private List<string> detectedEmotions = new List<string>();
+        private bool sessionStarted = false;
+
+        // Public read-only access for ConversationController
+        public int CurrentStressLevel => currentStressLevel;
+        public int CurrentTurn => currentTurn;
 
         public enum SessionState
         {
@@ -103,6 +111,12 @@ namespace AvatarXR.Managers
 
         private void Start()
         {
+            // Asegurar que el menú de pausa esté oculto al inicio
+            if (pauseMenuCanvas != null)
+            {
+                pauseMenuCanvas.SetActive(false);
+            }
+
             // Buscar MenuStateManager si no está asignado
             if (menuStateManager == null)
             {
@@ -174,7 +188,13 @@ namespace AvatarXR.Managers
 
         private void Update()
         {
-            if (sessionEnded || isPaused) return;
+            // Detectar botón de pausa (ESC) — debe funcionar incluso estando pausado
+            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+            {
+                TogglePause();
+            }
+
+            if (sessionEnded || isPaused || !sessionStarted) return;
 
             // Actualizar tiempo de sesión
             sessionElapsedTime += Time.deltaTime;
@@ -184,17 +204,13 @@ namespace AvatarXR.Managers
             {
                 EndSession(false, "Tiempo agotado");
             }
-
-            // Detectar botón de pausa (solo tecla ESC con nuevo Input System)
-            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
-            {
-                TogglePause();
-            }
         }
 
         private void InitializeSession()
         {
             Debug.Log("[Consultorio] Inicializando sesión de entrenamiento...");
+
+            sessionStarted = true;
 
             // Aplicar configuración desde GameManager
             ApplySessionConfig();
@@ -467,6 +483,12 @@ namespace AvatarXR.Managers
                 microphoneStateText.text = stateText;
                 microphoneStateText.color = targetColor;
             }
+
+            // Actualizar HUD de pantalla (Screen Space Overlay)
+            if (micHUD != null)
+            {
+                micHUD.SetState(state);
+            }
         }
 
         private void SetSessionState(SessionState newState)
@@ -480,7 +502,7 @@ namespace AvatarXR.Managers
 
         public void TogglePause()
         {
-            if (sessionEnded) return;
+            if (sessionEnded || !sessionStarted) return;
 
             isPaused = !isPaused;
 
@@ -567,6 +589,8 @@ namespace AvatarXR.Managers
         {
             Time.timeScale = 1f;
             isPaused = false;
+            sessionEnded = false;
+            sessionStarted = false;
             
             // Ocultar menú de pausa
             if (pauseMenuCanvas != null)
@@ -583,6 +607,9 @@ namespace AvatarXR.Managers
                     mainMenuCanvas.SetActive(false);
                 }
             }
+            
+            // Detener coroutines activas antes de reiniciar
+            StopAllCoroutines();
             
             // Reiniciar con la misma configuración (sin recargar escena)
             detectedEmotions.Clear();

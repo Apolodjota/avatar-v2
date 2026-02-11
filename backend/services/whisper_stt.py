@@ -21,11 +21,32 @@ class WhisperSTT:
         Returns:
             dict: {"text": str, "language": str, "segments": list}
         """
+        # Debug: check audio file
+        import os
+        file_size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+        print(f"🔍 [Whisper Debug] Audio file: {audio_path}, size: {file_size} bytes")
+        
+        try:
+            import librosa
+            audio_data, sr = librosa.load(audio_path, sr=None)
+            duration = len(audio_data) / sr if sr > 0 else 0
+            max_amplitude = max(abs(audio_data)) if len(audio_data) > 0 else 0
+            print(f"🔍 [Whisper Debug] Duration: {duration:.2f}s, Sample rate: {sr}, Max amplitude: {max_amplitude:.4f}")
+            
+            if max_amplitude < 0.01:
+                print(f"⚠️ [Whisper Debug] Audio is nearly SILENT (max amplitude {max_amplitude:.6f})")
+        except Exception as e:
+            print(f"⚠️ [Whisper Debug] Could not analyze audio: {e}")
+        
         result = self.model.transcribe(
             audio_path,
             language=language,
             fp16=False if self.device == "cpu" else True
         )
+        
+        print(f"🔍 [Whisper Debug] Raw result text: '{result['text']}'")
+        print(f"🔍 [Whisper Debug] Segments count: {len(result.get('segments', []))}")
+        
         return {
             "text": result["text"].strip(),
             "language": result["language"],

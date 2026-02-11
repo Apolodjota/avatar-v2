@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using System.Collections;
+using System.Collections.Generic;
 using AvatarXR.Network;
 using AvatarXR.Audio;
 using AvatarXR.Avatar;
@@ -9,7 +10,7 @@ namespace AvatarXR.Managers
 {
     /// <summary>
     /// Controla el flujo de conversación entre usuario y avatar.
-    /// Integra NetworkManager, MicrophoneRecorder y AvatarLoader.
+    /// v2: Agrega session_id, historial de conversación, y mejor manejo de errores.
     /// </summary>
     public class ConversationController : MonoBehaviour
     {
@@ -19,28 +20,44 @@ namespace AvatarXR.Managers
 
         [Header("Configuración")]
         [SerializeField] private bool usePushToTalk = true;
+        [SerializeField] private float minRecordingTime = 1.0f; // Mínimo 1 segundo
 
         private bool isProcessing = false;
         private bool isRecording = false;
+        private float recordingStartTime;
+
+        // Session tracking
+        private string sessionId;
+        private int currentTurn = 0;
+        private int currentStress = 7;
+        private List<ConversationEntry> conversationHistory = new List<ConversationEntry>();
+
+        [System.Serializable]
+        private class ConversationEntry
+        {
+            public string role; // "user" or "avatar"
+            public string text;
+            public int stressLevel;
+        }
 
         private void Start()
         {
-            // Verificar dependencias
+            // Generar session_id
+            sessionId = System.Guid.NewGuid().ToString();
+            Debug.Log($"[ConversationController] Session ID: {sessionId}");
+
             if (NetworkManager.Instance == null)
             {
-                Debug.LogError("[ConversationController] NetworkManager no encontrado. Creando...");
                 var go = new GameObject("NetworkManager");
                 go.AddComponent<NetworkManager>();
             }
 
             if (MicrophoneRecorder.Instance == null)
             {
-                Debug.LogError("[ConversationController] MicrophoneRecorder no encontrado. Creando...");
                 var go = new GameObject("MicrophoneRecorder");
                 go.AddComponent<MicrophoneRecorder>();
             }
 
-            // Suscribirse a eventos
             if (avatarLoader != null)
             {
                 avatarLoader.OnAvatarLoaded += OnAvatarReady;
@@ -51,19 +68,16 @@ namespace AvatarXR.Managers
         {
             if (isProcessing) return;
 
-            // Push-to-talk con tecla o botón del controlador
             if (usePushToTalk)
             {
                 HandlePushToTalk();
             }
             
-            // Botón A del controlador Quest para grabar
             HandleControllerInput();
         }
 
         private void HandlePushToTalk()
         {
-            // Usar nuevo Input System para teclado
             if (Keyboard.current == null) return;
             
             if (Keyboard.current.spaceKey.wasPressedThisFrame)
@@ -78,7 +92,6 @@ namespace AvatarXR.Managers
 
         private void HandleControllerInput()
         {
-            // Botón A (Primary) para grabar en Quest
             if (OVRInput.GetDown(OVRInput.Button.One))
             {
                 if (!isRecording)
@@ -103,9 +116,9 @@ namespace AvatarXR.Managers
             }
 
             isRecording = true;
+            recordingStartTime = Time.realtimeSinceStartup;
             MicrophoneRecorder.Instance.StartRecording();
             
-            // Notificar a ConsultorioController
             if (consultorioController != null)
             {
                 consultorioController.SetMicrophoneState(ConsultorioController.MicrophoneState.Open);
@@ -115,6 +128,15 @@ namespace AvatarXR.Managers
         public void StopRecordingAndProcess()
         {
             if (!isRecording) return;
+
+            // Verificar tiempo mínimo de grabación
+            float elapsed = Time.realtimeSinceStartup - recordingStartTime;
+            if (elapsed < minRecordingTime)
+            {
+                Debug.LogWarning($"[ConversationController] Grabación demasiado corta ({elapsed:F1}s), esperando...");
+                StartCoroutine(DelayedStop());
+                return;
+            }
 
             isRecording = false;
             byte[] audioData = MicrophoneRecorder.Instance.StopRecording();
@@ -133,6 +155,22 @@ namespace AvatarXR.Managers
             }
         }
 
+        private IEnumerator DelayedStop()
+        {
+            float remaining = minRecordingTime - (Time.realtimeSinceStartup - recordingStartTime);
+            yield return new WaitForSeconds(remaining);
+            
+            if (isRecording)
+            {
+                isRecording = false;
+                byte[] audioData = MicrophoneRecorder.Instance.StopRecording();
+                if (audioData != null && audioData.Length > 0)
+                {
+                    ProcessUserInput(audioData);
+                }
+            }
+        }
+
         private void ProcessUserInput(byte[] audioData)
         {
             isProcessing = true;
@@ -142,26 +180,18 @@ namespace AvatarXR.Managers
                 consultorioController.OnUserAudioCaptured();
             }
 
-            // Obtener estado actual de la sesión
-            int currentStress = 7;
-            int turnCount = 0;
-
-            if (GameManager.Instance != null)
-            {
-                // Usar valores de GameManager si están disponibles
-            }
-
-            StartCoroutine(SendToBackend(audioData, currentStress, turnCount));
+            StartCoroutine(SendToBackend(audioData, currentStress, currentTurn));
         }
 
         private IEnumerator SendToBackend(byte[] audioData, int stress, int turn)
         {
-            Debug.Log("[ConversationController] Enviando audio al backend...");
+            Debug.Log($"[ConversationController] Enviando audio al backend (session={sessionId}, turn={turn}, stress={stress})...");
 
-            yield return NetworkManager.Instance.ProcessAudio(
+            yield return NetworkManager.Instance.ProcessAudioWithSession(
                 audioData,
                 stress,
                 turn,
+                sessionId,
                 OnBackendResponse
             );
         }
@@ -172,6 +202,12 @@ namespace AvatarXR.Managers
             {
                 Debug.LogError("[ConversationController] Error en respuesta del backend");
                 isProcessing = false;
+                
+                // Volver a estado de espera para que el usuario pueda reintentar
+                if (consultorioController != null)
+                {
+                    consultorioController.OnAvatarFinishedSpeaking();
+                }
                 return;
             }
 
@@ -180,6 +216,25 @@ namespace AvatarXR.Managers
             Debug.Log($"  - Emoción: {response.user_emotion} ({response.emotion_confidence:F2})");
             Debug.Log($"  - Estrés: {response.stress_level_previous} → {response.stress_level_new}");
             Debug.Log($"  - Avatar: {response.avatar_response_text}");
+
+            // Actualizar estado local
+            currentStress = response.stress_level_new;
+            currentTurn = response.turn_number;
+
+            // Guardar en historial local
+            if (!string.IsNullOrEmpty(response.transcription))
+            {
+                conversationHistory.Add(new ConversationEntry {
+                    role = "user",
+                    text = response.transcription,
+                    stressLevel = response.stress_level_previous
+                });
+            }
+            conversationHistory.Add(new ConversationEntry {
+                role = "avatar",
+                text = response.avatar_response_text,
+                stressLevel = response.stress_level_new
+            });
 
             // Notificar a ConsultorioController
             if (consultorioController != null)
@@ -204,9 +259,12 @@ namespace AvatarXR.Managers
             }
             else
             {
-                // Sin audio, solo texto
                 Debug.Log($"[Avatar responde (sin audio)]: {response.avatar_response_text}");
                 isProcessing = false;
+                if (consultorioController != null)
+                {
+                    consultorioController.OnAvatarFinishedSpeaking();
+                }
             }
         }
 
@@ -250,17 +308,14 @@ namespace AvatarXR.Managers
             
             Debug.Log($"[ConversationController] Solicitando hablar: {text}");
             
-            // Notificar inicio
             if (consultorioController != null) consultorioController.OnAvatarStartSpeaking();
 
-            // Llamar al backend para TTS
             if (NetworkManager.Instance != null && NetworkManager.Instance.IsConnected)
             {
                 StartCoroutine(SynthesizeAndPlay(text, stressLevel));
             }
             else
             {
-                // Fallback a simulación si no hay backend
                 Debug.LogWarning("[ConversationController] Backend no disponible, simulando...");
                 StartCoroutine(SimulateSpeech(text));
             }
@@ -276,7 +331,6 @@ namespace AvatarXR.Managers
             
             if (ttsResponse != null && !string.IsNullOrEmpty(ttsResponse.audio_url))
             {
-                // Descargar y reproducir audio
                 yield return NetworkManager.Instance.DownloadAudio(ttsResponse.audio_url, (clip) => {
                     if (clip != null && avatarLoader != null)
                     {
@@ -302,48 +356,9 @@ namespace AvatarXR.Managers
         private IEnumerator SimulateSpeech(string text)
         {
             float duration = 2f + (text.Length * 0.05f); 
-            Debug.Log($"[ConversationController] Simulando habla por {duration}s: {text}");
-            
-            // Play a "mumble" tone
-            if (GetComponent<AudioSource>() != null)
-            {
-                AudioClip clip = CreateToneAudioClip(440, duration);
-                GetComponent<AudioSource>().PlayOneShot(clip);
-            }
-            else
-            {
-                 // Try to find avatar audio source
-                 var avatarLoader = FindObjectOfType<AvatarLoader>();
-                 if (avatarLoader != null && avatarLoader.LoadedAvatar != null)
-                 {
-                     var audio = avatarLoader.LoadedAvatar.GetComponent<AudioSource>();
-                     if (audio != null)
-                     {
-                         AudioClip clip = CreateToneAudioClip(440, duration);
-                         audio.PlayOneShot(clip);
-                     }
-                 }
-            }
-
+            Debug.Log($"[ConversationController] Simulando habla por {duration}s");
             yield return new WaitForSeconds(duration);
-            
             OnAvatarFinishedSpeaking();
-        }
-
-        private AudioClip CreateToneAudioClip(int frequency, float duration)
-        {
-            int sampleRate = 44100;
-            int samples = (int)(sampleRate * duration);
-            float[] data = new float[samples];
-            
-            for (int i = 0; i < samples; i++)
-            {
-                data[i] = Mathf.Sin(2 * Mathf.PI * frequency * i / sampleRate);
-            }
-            
-            AudioClip clip = AudioClip.Create("Tone", samples, 1, sampleRate, false);
-            clip.SetData(data, 0);
-            return clip;
         }
 
         private void OnAvatarReady(GameObject avatar)
